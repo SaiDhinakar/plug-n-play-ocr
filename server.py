@@ -79,9 +79,8 @@ def get_ocr_model(lang_code: str) -> PaddleOCR:
         ocr_models[lang_code] = PaddleOCR(
             lang=lang_code,
             use_angle_cls=True,
-            use_gpu=hw_config["use_gpu"],
+            device="gpu" if hw_config["use_gpu"] else "cpu",
             enable_mkldnn=hw_config["enable_mkldnn"],
-            show_log=False
         )
     return ocr_models[lang_code]
 
