@@ -13,6 +13,11 @@ from fastapi.responses import JSONResponse
 from paddleocr import PaddleOCR
 from PIL import Image
 
+from fastapi.responses import FileResponse
+import uuid
+from src.pdf_to_docx_api import convert_pdf_to_docx
+
+
 # Get the directory of this file
 BASE_DIR = Path(__file__).parent
 FONTS_DIR = BASE_DIR / "fonts"
@@ -185,3 +190,31 @@ async def extract_text(
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8001)
+
+UPLOADS_DIR = BASE_DIR / "uploads"
+OUTPUTS_DIR = BASE_DIR / "outputs"
+
+UPLOADS_DIR.mkdir(exist_ok=True)
+OUTPUTS_DIR.mkdir(exist_ok=True)
+
+@app.post("/convert/pdf-to-docx/")
+async def pdf_to_docx_api(file: UploadFile = File(...)):
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+    file_id = str(uuid.uuid4())
+    pdf_path = UPLOADS_DIR / f"{file_id}.pdf"
+    docx_path = OUTPUTS_DIR / f"{file_id}.docx"
+
+    # Save uploaded PDF
+    with open(pdf_path, "wb") as f:
+        f.write(await file.read())
+
+    # Convert PDF → DOCX
+    convert_pdf_to_docx(str(pdf_path), str(docx_path))
+
+    return FileResponse(
+        path=docx_path,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename="converted.docx"
+    )
