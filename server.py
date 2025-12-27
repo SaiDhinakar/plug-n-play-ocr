@@ -12,6 +12,8 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.responses import JSONResponse
 from paddleocr import PaddleOCR
 from PIL import Image
+import cpuinfo
+import paddle
 
 # Get the directory of this file
 BASE_DIR = Path(__file__).parent
@@ -30,15 +32,57 @@ with open(LANGUAGES_FILE, 'r', encoding='utf-8') as f:
 # Initialize OCR models cache
 ocr_models: Dict[str, PaddleOCR] = {}
 
+def get_hardware_config() -> Dict[str, any]:
+    """
+    Detect hardware and return PaddleOCR configuration arguments.
+    """
+    config = {
+        "use_gpu": False,
+        "enable_mkldnn": False,
+        "backend_name": "Standard CPU"
+    }
+
+    # 1. Check for NVIDIA GPU (CUDA)
+    try:
+        if paddle.is_compiled_with_cuda():
+            config["use_gpu"] = True
+            config["backend_name"] = "CUDA GPU"
+            return config
+    except Exception:
+        pass
+
+    # 2. Check for Intel CPU
+    try:
+        info = cpuinfo.get_cpu_info()
+        vendor = info.get("vendor_id_raw", "")
+        brand = info.get("brand_raw", "")
+        
+        if "Intel" in vendor or "Intel" in brand:
+            config["enable_mkldnn"] = True
+            config["backend_name"] = "OpenVINO (Intel MKL-DNN)"
+            return config
+    except Exception:
+        pass
+
+    # 3. Fallback to Standard CPU
+    return config
+
+# Detect hardware configuration at startup
+hw_config = get_hardware_config()
+print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] INFO: Hardware Detection: Selected Backend: {hw_config['backend_name']}")
+print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] INFO: Configuration: use_gpu={hw_config['use_gpu']}, enable_mkldnn={hw_config['enable_mkldnn']}")
+
 def get_ocr_model(lang_code: str) -> PaddleOCR:
     """Get or create OCR model for the specified language."""
     if lang_code not in ocr_models:
-        # Initialize PaddleOCR (version 3.x API)
+        # Initialize PaddleOCR with hardware config
         ocr_models[lang_code] = PaddleOCR(
             lang=lang_code,
+            use_angle_cls=True,
+            device="gpu" if hw_config["use_gpu"] else "cpu",
+            enable_mkldnn=hw_config["enable_mkldnn"],
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
-            use_textline_orientation=False
         )
     return ocr_models[lang_code]
 
