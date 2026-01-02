@@ -11,19 +11,14 @@ from typing import Dict, List, Optional
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.responses import JSONResponse
 from paddleocr import PaddleOCR
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 import cpuinfo
 import paddle
+import cv2
 
 # Get the directory of this file
 BASE_DIR = Path(__file__).parent
-FONTS_DIR = BASE_DIR / "fonts"
-MODELS_DIR = BASE_DIR / "models"
 LANGUAGES_FILE = BASE_DIR / "languages.json"
-
-# Ensure directories exist
-FONTS_DIR.mkdir(exist_ok=True)
-MODELS_DIR.mkdir(exist_ok=True)
 
 # Load language configurations
 with open(LANGUAGES_FILE, 'r', encoding='utf-8') as f:
@@ -31,6 +26,52 @@ with open(LANGUAGES_FILE, 'r', encoding='utf-8') as f:
 
 # Initialize OCR models cache
 ocr_models: Dict[str, PaddleOCR] = {}
+
+def normalize_image(np_image: np.ndarray, max_dimension: int = 2048) -> np.ndarray:
+    """
+    Normalize and preprocess image for better OCR accuracy.
+    
+    Steps:
+    1. Resize image if it exceeds max dimension (preserving aspect ratio)
+    2. Convert to grayscale for consistent processing
+    3. Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
+    4. Denoise using bilateral filter
+    5. Normalize pixel values
+    6. Convert back to RGB for PaddleOCR
+    
+    Args:
+        np_image: Input image as numpy array (RGB format)
+        max_dimension: Maximum width or height (default: 2048)
+    
+    Returns:
+        Normalized image as numpy array (RGB format)
+    """
+    # Resize image if it exceeds max dimension (preserving aspect ratio)
+    height, width = np_image.shape[:2]
+    if max(height, width) > max_dimension:
+        scale = max_dimension / max(height, width)
+        new_width = int(width * scale)
+        new_height = int(height * scale)
+        np_image = cv2.resize(np_image, (new_width, new_height), interpolation=cv2.INTER_AREA)
+    
+    # Convert RGB to grayscale
+    gray = cv2.cvtColor(np_image, cv2.COLOR_RGB2GRAY)
+    
+    # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
+    # This enhances contrast while limiting noise amplification
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
+    
+    # Denoise using bilateral filter (preserves edges while reducing noise)
+    denoised = cv2.bilateralFilter(enhanced, d=9, sigmaColor=75, sigmaSpace=75)
+    
+    # Normalize pixel values to 0-255 range
+    normalized = cv2.normalize(denoised, None, 0, 255, cv2.NORM_MINMAX)
+    
+    # Convert back to RGB (3 channels) for PaddleOCR compatibility
+    rgb_normalized = cv2.cvtColor(normalized, cv2.COLOR_GRAY2RGB)
+    
+    return rgb_normalized
 
 def get_hardware_config() -> Dict[str, any]:
     """
@@ -156,8 +197,11 @@ async def extract_text(
         image_bytes = await file.read()
         pil_image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
         
-        # Convert PIL -> numpy for PaddleOCR
+        # Convert PIL -> numpy for processing
         np_image = np.array(pil_image)
+        
+        # Normalize the image for better OCR accuracy
+        np_image = normalize_image(np_image)
         
         # Get OCR model for the language
         ocr_model = get_ocr_model(lang)
